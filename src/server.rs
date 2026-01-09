@@ -50,10 +50,8 @@ impl Server {
     }
 
     async fn handle_client(&self, mut client: TcpStream) -> Result<(), String> {
-        // SOCKS5 handshake
         let mut buf = [0u8; 1024];
 
-        // Read authentication methods
         let n = client
             .read(&mut buf)
             .await
@@ -62,13 +60,11 @@ impl Server {
             return Err("Not a SOCKS5 request".to_string());
         }
 
-        // Send authentication method (no auth)
         client
             .write_all(&[0x05, 0x00])
             .await
             .map_err(|e| format!("Failed to write: {}", e))?;
 
-        // Read connection request
         let n = client
             .read(&mut buf)
             .await
@@ -77,9 +73,7 @@ impl Server {
             return Err("Invalid SOCKS5 request".to_string());
         }
 
-        // Parse address
         let target_addr = match buf[3] {
-            // IPv4
             0x01 => {
                 if n < 10 {
                     return Err("Invalid IPv4 address".to_string());
@@ -88,7 +82,6 @@ impl Server {
                 let port = u16::from_be_bytes([buf[8], buf[9]]);
                 std::net::SocketAddr::V4(std::net::SocketAddrV4::new(ip, port))
             }
-            // Domain name
             0x03 => {
                 let domain_len = buf[4] as usize;
                 if n < 5 + domain_len + 2 {
@@ -100,16 +93,12 @@ impl Server {
 
                 info!("🌍 Domain target: {}:{}", domain, port);
 
-                // Resolve domain to IP
-                let addr = tokio::net::lookup_host((domain, port))
+                tokio::net::lookup_host((domain, port))
                     .await
                     .map_err(|e| format!("Failed to resolve domain: {}", e))?
                     .next()
-                    .ok_or_else(|| "Failed to resolve domain".to_string())?;
-
-                addr
+                    .ok_or_else(|| "Failed to resolve domain".to_string())?
             }
-            // IPv6
             0x04 => {
                 if n < 22 {
                     return Err("Invalid IPv6 address".to_string());
@@ -125,12 +114,10 @@ impl Server {
 
         info!("🔗 Connecting to target: {}", target_addr);
 
-        // Connect to target
         let target = TcpStream::connect(target_addr)
             .await
             .map_err(|e| format!("Failed to connect to target: {}", e))?;
 
-        // Send success response
         let mut response = vec![0x05, 0x00, 0x00];
 
         match target_addr {
@@ -151,12 +138,10 @@ impl Server {
             .await
             .map_err(|e| format!("Failed to send response: {}", e))?;
 
-        // Start bidirectional proxy with Maybenot obfuscation
         self.proxy_data(client, target).await
     }
 
     async fn proxy_data(&self, client: TcpStream, target: TcpStream) -> Result<(), String> {
-        // Set TCP_NODELAY to improve performance for interactive sessions
         if let Err(e) = client.set_nodelay(true) {
             error!("❌ Failed to set TCP_NODELAY on client socket: {}", e);
         }
@@ -165,32 +150,26 @@ impl Server {
         }
 
         let (mut client_read, mut client_write) = client.into_split();
-        // Fix the unused mut warning
         let (mut target_read, target_write) = target.into_split();
 
         let framework_clone = self.framework.clone();
         let framework_clone2 = self.framework.clone();
         let framework_clone3 = self.framework.clone();
 
-        // Create a shared last_activity variable
         let last_activity = Arc::new(StdMutex::new(Instant::now()));
         let last_activity_clone1 = last_activity.clone();
         let last_activity_clone2 = last_activity.clone();
 
-        // We need to wrap target_write in an Arc<Mutex<>> to share it between tasks
         let target_write = Arc::new(TokioMutex::new(target_write));
         let target_write_clone = target_write.clone();
 
-        // Add a connection state flag to track if the connection is still active
         let connection_active = Arc::new(StdMutex::new(true));
-        // Create separate clones for each task to avoid the move error
         let connection_active_dummy = connection_active.clone();
         let connection_active_c2t = connection_active.clone();
         let connection_active_t2c = connection_active.clone();
 
-        // Increase buffer sizes for better handling of large responses
-        let client_buffer_size = 32768; // 32KB
-        let target_buffer_size = 32768; // 32KB
+        let client_buffer_size = 32768;
+        let target_buffer_size = 32768;
 
         let dummy_task = tokio::spawn(async move {
             loop {
@@ -204,13 +183,11 @@ impl Server {
                 };
 
                 if elapsed > Duration::from_millis(IDLE_THRESHOLD_MS) {
-                    let dummy_data =
+                    let dummy_data: Vec<u8> =
                         crate::obfuscation::generate_dummy_traffic(&framework_clone3).await;
                     if !dummy_data.is_empty() {
-                        // Get a lock on target_write
                         if let Ok(mut write_guard) = target_write.try_lock() {
                             if let Err(e) = write_guard.write_all(&dummy_data).await {
-                                // If we get a broken pipe, the connection is closed
                                 if e.kind() == std::io::ErrorKind::BrokenPipe {
                                     info!("🔌 Connection closed, stopping dummy traffic");
                                     *connection_active_dummy.lock().unwrap() = false;
@@ -221,7 +198,6 @@ impl Server {
                             }
                         }
                     }
-
                     sleep(Duration::from_millis(DUMMY_TRAFFIC_INTERVAL_MS)).await;
                 } else {
                     sleep(Duration::from_millis(100)).await;
@@ -235,24 +211,20 @@ impl Server {
             loop {
                 match client_read.read(&mut buffer).await {
                     Ok(0) => {
-                        // Connection closed by client
                         info!("🔌 Connection closed by client");
                         *connection_active_c2t.lock().unwrap() = false;
                         break;
                     }
                     Ok(n) => {
-                        // Update last activity time
                         {
                             let mut guard = last_activity_clone1.lock().unwrap();
                             *guard = Instant::now();
                         }
 
-                        // Apply obfuscation to all traffic, including YouTube and Twitch
-                        let data_to_send =
+                        let data_to_send: Vec<u8> =
                             crate::obfuscation::obfuscate_data(&framework_clone, &buffer[..n])
                                 .await;
 
-                        // Get a lock on target_write_clone
                         let mut write_guard = target_write_clone.lock().await;
                         if let Err(e) = write_guard.write_all(&data_to_send).await {
                             if e.kind() == std::io::ErrorKind::BrokenPipe {
@@ -276,32 +248,28 @@ impl Server {
         let t2c = tokio::spawn(async move {
             let mut buffer = vec![0u8; target_buffer_size];
             let mut consecutive_errors = 0;
-            let max_consecutive_errors = 10; // Increased tolerance for resets
-            let mut backoff_ms = 50; // Start with a small backoff
+            let max_consecutive_errors = 10;
+            let mut backoff_ms = 50;
 
             loop {
                 match target_read.read(&mut buffer).await {
                     Ok(0) => {
-                        // Connection closed by target
                         info!("🔌 Connection closed by target");
                         *connection_active_t2c.lock().unwrap() = false;
                         break;
                     }
                     Ok(n) => {
-                        // Reset error counter on successful read
                         consecutive_errors = 0;
 
-                        // Update last activity time
                         {
                             let mut guard = last_activity_clone2.lock().unwrap();
                             *guard = Instant::now();
                         }
 
-                        let data_to_send =
+                        let data_to_send: Vec<u8> =
                             crate::obfuscation::deobfuscate_data(&framework_clone2, &buffer[..n])
                                 .await;
 
-                        // Use a timeout for writing to client to avoid hanging
                         match tokio::time::timeout(
                             Duration::from_secs(5),
                             client_write.write_all(&data_to_send),
@@ -310,7 +278,6 @@ impl Server {
                         {
                             Ok(result) => {
                                 if let Err(e) = result {
-                                    // If we get a broken pipe, the connection is closed
                                     if e.kind() == std::io::ErrorKind::BrokenPipe {
                                         info!("🔌 Connection to client closed");
                                         *connection_active_t2c.lock().unwrap() = false;
@@ -328,7 +295,6 @@ impl Server {
                         }
                     }
                     Err(e) => {
-                        // For connection reset errors, we'll be more tolerant
                         if e.kind() == std::io::ErrorKind::ConnectionReset
                             || e.kind() == std::io::ErrorKind::ConnectionAborted
                             || e.kind() == std::io::ErrorKind::BrokenPipe
@@ -339,14 +305,12 @@ impl Server {
                                 e, consecutive_errors, max_consecutive_errors
                             );
 
-                            // Only break after multiple consecutive errors
                             if consecutive_errors >= max_consecutive_errors {
                                 error!("❌ Too many connection errors, closing connection");
                                 *connection_active_t2c.lock().unwrap() = false;
                                 break;
                             }
 
-                            // Exponential backoff with a cap
                             backoff_ms = std::cmp::min(backoff_ms * 2, 1000);
                             sleep(Duration::from_millis(backoff_ms)).await;
                             continue;
@@ -360,8 +324,8 @@ impl Server {
             }
         });
 
-        // Wait for all tasks
         let _ = tokio::join!(c2t, t2c, dummy_task);
         Ok(())
     }
 }
+
