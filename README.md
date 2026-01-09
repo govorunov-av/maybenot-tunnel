@@ -1,3 +1,19 @@
+# Отличие от оригинальной репы:
+
+Изменены Cargo.toml, src/obfuscation.rc, src/server.rc.
+
+Изменения производились из-за того, что новые версии maybenot framework требуют rand 0.9 версии, а в оригинальном репо до сих пор 0.8. 
+
+
+# Где тестировалась сборка
+
+На Alt server p11.0 на момент 09.01.2026, cargo 1.92.0, 
+
+# Для чего мне нужен maybenot
+
+Для проекта SquidFW, для большей безопасности исходящего интернет траффика.
+
+
 # Maybenot Tunnel
 
 A SOCKS5 proxy with traffic obfuscation capabilities using the [Maybenot Framework](https://github.com/maybenot-io/maybenot).
